@@ -76,7 +76,13 @@ def dump_dialog(dialog)
           msg_chunk = exec_tg_command('history', dialog['print_name'],
                                       $config['chunk_size'], cur_offset)
         end
-        break
+        if msg_chunk.is_a?(Array)
+          break
+        else
+          $log.error('Telegram-cli returned a non array chunk, retrying... (%d/%d)' % [
+            retry_count += 1, $config['chunk_retry']
+          ])
+        end
       rescue Timeout::Error
         if retry_count == $config['chunk_retry']
           $log.error('Failed to fetch chunk of %d messages from offset %d '\
@@ -129,9 +135,13 @@ def dump_dialog(dialog)
       end
 
       if dump_msg
-        process_media(dialog, msg)
-        if $dumper.dump_msg(dialog, msg) == false
-          keep_dumping = false
+        begin
+          process_media(dialog, msg)
+          if $dumper.dump_msg(dialog, msg) == false
+            keep_dumping = false
+          end
+        rescue Timeout::Error
+          keep_dumping = true
         end
       end
 
@@ -165,10 +175,20 @@ def process_media(dialog, msg)
     end
     filename = case
       when $config['copy_media']
-        filename = File.basename(response['result'])
-        destination = File.join(get_media_dir(dialog), fix_media_ext(filename))
-        FileUtils.cp(response['result'], destination)
-        destination
+        if response.nil?
+          $log.error('Missing media for message id %s' % msg['id'])
+          "missing_media_%s" % msg['id']
+        else
+          begin
+            filename = File.basename(response['result'])
+            destination = File.join(get_media_dir(dialog), fix_media_ext(filename))
+            FileUtils.cp(response['result'], destination)
+            destination
+          rescue StandardError => e
+            $log.error('Missing media for message id %s' % msg['id'])
+            "missing_media_%s" % msg['id']
+          end
+        end
       else
         response['result']
     end
